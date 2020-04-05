@@ -1,0 +1,38 @@
+# build artifacts
+
+.eggs/
+.mypy_cache
+build/
+dist/
+
+
+# dev tools
+
+.envrc
+.python-version
+.idea
+
+
+# jupyter notebooks
+
+.ipynb_checkpoints
+
+
+# miscellaneous
+
+.cache/
+doc/_build/
+*.swp
+
+
+# python
+
+*.pyc
+*.pyo
+__pycache__
+
+
+# testing and continuous integration
+
+.coverage
+.pytest_cache/
