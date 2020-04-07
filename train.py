@@ -48,7 +48,7 @@ def train(opt, train_loader, model, epoch, val_loader, vocab):
             validate_parser(opt, val_loader, model, vocab, logger)
 
 def debug(opt, model):
-    data_iter = data.get_eval_iter(opt.data_path, "toy", vocab, 
+    data_iter = data.get_eval_iter(opt.data_path, "ptb-toy", vocab, 
         batch_size=opt.batch_size, shuffle=False)
     for images, captions, lengths, ids, spans in data_iter:
         print(images.size(), ids, lengths)
@@ -186,7 +186,7 @@ if __name__ == '__main__':
     logger.info(opt)
 
     # load predefined vocabulary and pretrained word embeddings if applicable
-    vocab = pickle.load(open(os.path.join(opt.data_path, "coco.dict.pkl"), 'rb'))
+    vocab = pickle.load(open(os.path.join(opt.data_path, "ptb.dict.pkl"), 'rb'))
     opt.vocab_size = len(vocab)
 
     # construct the model
@@ -208,11 +208,11 @@ if __name__ == '__main__':
         )
     else:
         train_loader = data.get_eval_iter(
-            opt.data_path, "train", vocab, opt.batch_size, 
+            opt.data_path, "ptb-train", vocab, opt.batch_size, 
             nworker=opt.workers, shuffle=False, sampler=True 
         )
         val_loader = data.get_eval_iter(
-            opt.data_path, "val", vocab, int(opt.batch_size / 2), 
+            opt.data_path, "ptb-val", vocab, int(opt.batch_size / 2), 
             nworker=opt.workers, shuffle=False, sampler=None 
         )
     """

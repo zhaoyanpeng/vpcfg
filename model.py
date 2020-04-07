@@ -91,7 +91,8 @@ class VGNSLCFGs(object):
 
         #ll, _ = dist.partition
         #ll, _ = dist.inside
-        ll, _ = dist.inside_bp
+        #ll, _ = dist.inside_bp
+        ll = dist.partition
         nll = -ll
         kl = torch.zeros_like(nll) if kl is None else kl
 

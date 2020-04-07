@@ -27,7 +27,11 @@ def eval_trees(model_path, split='test', gold='test_ground-truth.txt'):
     opt = checkpoint['opt']
 
     # load vocabulary used by the model
-    vocab = pickle.load(open(os.path.join(opt.data_path, "coco.dict.pkl"), 'rb'))
+    if split.startswith("ptb"):
+        vocab_name = "ptb.dict.pkl" 
+    elif split.startswith("val"):
+        vocab_name = "coco.dict.pkl" 
+    vocab = pickle.load(open(os.path.join(opt.data_path, vocab_name), 'rb'))
     opt.vocab_size = len(vocab)
     opt.vse_rl_alpha=0.0
     opt.vse_mt_alpha=0.0

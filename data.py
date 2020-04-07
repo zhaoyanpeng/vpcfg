@@ -1,4 +1,4 @@
-import os, sys, pickle, json
+import os, sys, re, pickle, json
 import numpy as np
 
 import torch
@@ -10,6 +10,10 @@ def set_rnd_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+def clean_number(w):    
+    new_w = re.sub('[0-9]{1,}([,.]?[0-9]*)*', 'N', w)
+    return new_w
+
 class EvalDataLoader(data.Dataset):
     def __init__(self, data_path, data_split, vocab):
         self.vocab = vocab
@@ -20,7 +24,8 @@ class EvalDataLoader(data.Dataset):
         with open(os.path.join(data_path, f'{data_split}_caps.json'), 'r') as f:
             for line in f:
                 (caption, span, label, tag) = json.loads(line)
-                self.captions.append(caption.strip().lower().split())
+                caption = [clean_number(w) for w in caption.strip().lower().split()]
+                self.captions.append(caption)
                 self.labels.append(label)
                 self.spans.append(span)
                 self.tags.append(tag)
@@ -93,7 +98,10 @@ class DataLoader(data.Dataset):
         with open(os.path.join(data_path, f'{data_split}_caps.json'), 'r') as f:
             for line in f:
                 (caption, span) = json.loads(line)
-                self.captions.append(caption.strip().lower().split())
+                caption = [clean_number(w) for w in caption.strip().lower().split()]
+                if len(caption) < 2 or len(caption) > 70:
+                    continue
+                self.captions.append(caption)
                 self.spans.append(span)
         self.length = len(self.captions)
 
@@ -101,7 +109,7 @@ class DataLoader(data.Dataset):
         if load_img:
             self.images = np.load(os.path.join(data_path, f'{data_split}_ims.npy'))
         else:
-            self.images = np.zeros((self.length // 5, img_dim))
+            self.images = np.zeros((self.length // 1, img_dim))
         
         # each image can have 1 caption or 5 captions 
         if self.images.shape[0] != self.length:
@@ -173,12 +181,12 @@ def get_data_loader(data_path, data_split, vocab,
 
 def get_train_iters(data_path, vocab, batch_size, nworker):
     train_loader = get_data_loader(
-        data_path, 'train', vocab, 
-        batch_size=batch_size, shuffle=False, nworker=nworker, sampler=True
+        data_path, 'ptb-train', vocab, 
+        batch_size=batch_size, shuffle=False, nworker=nworker, sampler=True, loadimg=False
     )
     val_loader = get_data_loader(
-        data_path, 'val', vocab, 
-        batch_size=batch_size, shuffle=False, nworker=nworker, sampler=None
+        data_path, 'ptb-val', vocab, 
+        batch_size=batch_size, shuffle=False, nworker=nworker, sampler=None, loadimg=False
     )
     return train_loader, val_loader
 
