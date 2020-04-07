@@ -6,6 +6,10 @@ import torch.utils.data as data
 
 from utils import Vocabulary
 
+def set_rnd_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
 class EvalDataLoader(data.Dataset):
     def __init__(self, data_path, data_split, vocab):
         self.vocab = vocab

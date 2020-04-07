@@ -189,7 +189,19 @@ if __name__ == '__main__':
     vocab = pickle.load(open(os.path.join(opt.data_path, "coco.dict.pkl"), 'rb'))
     opt.vocab_size = len(vocab)
 
+    # construct the model
+    model = VGNSLCFGs(opt)
+    model.vocab = vocab
+    if opt.model_init:
+        logger.info("override parser's params.")
+        checkpoint = torch.load(opt.model_init, map_location='cpu')
+        parser_params = checkpoint['model'][VGNSLCFGs.NS_PARSER]
+        model.parser.load_state_dict(parser_params)
+
+    #debug(opt, model)
+
     # Load data loaders
+    data.set_rnd_seed(10101)
     if opt.batch_size <= 5:
         train_loader, val_loader = data.get_train_iters(
             opt.data_path, vocab, opt.batch_size, opt.workers
@@ -203,18 +215,21 @@ if __name__ == '__main__':
             opt.data_path, "val", vocab, int(opt.batch_size / 2), 
             nworker=opt.workers, shuffle=False, sampler=None 
         )
-
-    # construct the model
-    model = VGNSLCFGs(opt)
-    model.vocab = vocab
-    if opt.model_init:
-        logger.info("override parser's params.")
-        checkpoint = torch.load(opt.model_init, map_location='cpu')
-        parser_params = checkpoint['model'][VGNSLCFGs.NS_PARSER]
-        model.parser.load_state_dict(parser_params)
-
-    #debug(opt, model)
-
+    """
+    all_ids = []
+    for i, train_data in enumerate(train_loader):
+        captions, lengths, ids = train_data[1], train_data[2], train_data[3]
+        captions = captions.tolist()
+        for b, length in enumerate(lengths):
+            caption = [vocab.idx2word[int(word)] for word in captions[b]]
+            caption = ' '.join(caption[:length])
+            print(caption)
+        all_ids.extend(ids)
+        if (i + 1) * opt.batch_size > 300:
+            print(all_ids)
+            import sys
+            sys.exit(0)
+    """
     save_checkpoint({
         'epoch': -1,
         'model': model.get_state_dict(),

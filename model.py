@@ -30,7 +30,7 @@ class VGNSLCFGs(object):
 
         if torch.cuda.is_available():
             self.parser.cuda()
-            cudnn.benchmark = True
+            cudnn.benchmark = False 
 
         self.vse_rl_alpha = opt.vse_rl_alpha
         self.vse_mt_alpha = opt.vse_mt_alpha

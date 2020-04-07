@@ -1,7 +1,7 @@
 flag=$1
 mode=$1
 
-cuda=0
+cuda=1
 batch_size=5
 val_step=10000000
 log_step=500
@@ -12,7 +12,7 @@ vse_lm_alpha=1.0
 vse_bc_alpha=0.0
 vse_h_alpha=0.00
 
-seed=1213
+seed=1234
 
 save_path="/home/s1847450/data/vsyntax/"
 data_path="/afs/inf.ed.ac.uk/group/project/s1847450/mscoco/"
@@ -30,10 +30,13 @@ model_name="v.rnd.pcfg.reg.05"
 model_name="v.rnd.pcfg.reg.05.05"
 model_name="v.rnd.pcfg.again"
 model_name="v.rnd.pcfg.reg.00.05"
-model_name="v.rnd.test"
 
 model_name="v.rnd.pcfg."$seed
 model_name="v.rnd.pcfg."$seed.copy
+model_name="v.pcfg."$seed
+
+model_name="v.rnd.test"
+
 
 log_path=$save_path$model_name
 log_file=$log_path/"stdout.txt"
