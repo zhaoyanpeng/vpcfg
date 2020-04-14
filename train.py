@@ -48,7 +48,7 @@ def train(opt, train_loader, model, epoch, val_loader, vocab):
             validate_parser(opt, val_loader, model, vocab, logger)
 
 def debug(opt, model):
-    data_iter = data.get_eval_iter(opt.data_path, "ptb-toy", vocab, 
+    data_iter = data.get_eval_iter(opt.data_path, opt.prefix + "toy", vocab, 
         batch_size=opt.batch_size, shuffle=False)
     for images, captions, lengths, ids, spans in data_iter:
         print(images.size(), ids, lengths)
@@ -95,6 +95,8 @@ if __name__ == '__main__':
     # 
     parser.add_argument('--seed', default=3435, type=int, help='random seed')
     parser.add_argument('--model_init', default=None, type=str, help='random seed')
+    parser.add_argument('--vocab_name', default=None, type=str, help='vocab name')
+    parser.add_argument('--prefix', default="", type=str, help='prefix')
 
     parser.add_argument('--data_path', default='../data/mscoco',
                         help='path to datasets')
@@ -186,8 +188,10 @@ if __name__ == '__main__':
     logger.info(opt)
 
     # load predefined vocabulary and pretrained word embeddings if applicable
-    vocab = pickle.load(open(os.path.join(opt.data_path, "ptb.dict.pkl"), 'rb'))
+    vocab = pickle.load(open(os.path.join(opt.data_path, opt.vocab_name), 'rb'))
     opt.vocab_size = len(vocab)
+
+    logger.info("|vocab|={}".format(len(vocab)))
 
     # construct the model
     model = VGNSLCFGs(opt)
@@ -201,18 +205,18 @@ if __name__ == '__main__':
     #debug(opt, model)
 
     # Load data loaders
-    data.set_rnd_seed(10101)
-    if opt.batch_size <= 5:
+    #data.set_rnd_seed(10101)
+    if opt.batch_size < 5:
         train_loader, val_loader = data.get_train_iters(
-            opt.data_path, vocab, opt.batch_size, opt.workers
+            opt.data_path, opt.prefix, vocab, opt.batch_size, opt.workers
         )
     else:
         train_loader = data.get_eval_iter(
-            opt.data_path, "ptb-train", vocab, opt.batch_size, 
+            opt.data_path, opt.prefix + "train", vocab, opt.batch_size, 
             nworker=opt.workers, shuffle=False, sampler=True 
         )
         val_loader = data.get_eval_iter(
-            opt.data_path, "ptb-val", vocab, int(opt.batch_size / 2), 
+            opt.data_path, opt.prefix + "val", vocab, int(opt.batch_size / 2) + 1, 
             nworker=opt.workers, shuffle=False, sampler=None 
         )
     """

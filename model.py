@@ -175,5 +175,7 @@ class VGNSLCFGs(object):
             gold_action = utils.get_actions(gold_t) 
             gold_t = utils.get_tree(gold_action, sent_s)
             info += "\nPred T: {}\nGold T: {}".format(pred_t, gold_t)
+        if epoch > 0:
+            del images, captions, lengths, ids, spans
         return info
 

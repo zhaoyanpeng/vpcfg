@@ -20,17 +20,14 @@ def build_parse(spans, caption, vocab):
             tree[r] = tree[l] = span
     return tree[0] 
 
-def eval_trees(model_path, split='test', gold='test_ground-truth.txt'):
+def eval_trees(model_path, vocab_name, split='test', gold='test_ground-truth.txt'):
     """ use the trained model to generate parse trees for text """
     # load model and options
     checkpoint = torch.load(model_path, map_location='cpu')
     opt = checkpoint['opt']
 
     # load vocabulary used by the model
-    if split.startswith("ptb"):
-        vocab_name = "ptb.dict.pkl" 
-    elif split.startswith("val"):
-        vocab_name = "coco.dict.pkl" 
+    vocab_name = getattr(opt, "vocab_name", vocab_name)
     vocab = pickle.load(open(os.path.join(opt.data_path, vocab_name), 'rb'))
     opt.vocab_size = len(vocab)
     opt.vse_rl_alpha=0.0
@@ -49,7 +46,8 @@ def eval_trees(model_path, split='test', gold='test_ground-truth.txt'):
 
     print('Loading dataset', opt.data_path)
     batch_size = 5 
-    data_loader = data.eval_data_iter(opt.data_path, split, vocab, batch_size=batch_size)
+    prefix = getattr(opt, "prefix", "")
+    data_loader = data.eval_data_iter(opt.data_path, prefix + split, vocab, batch_size=batch_size)
 
     # stats
     trees = list()
@@ -258,7 +256,9 @@ if __name__ == '__main__':
                         help='model path to evaluate')
     parser.add_argument('--gold_name', type=str, default='test_ground-truth.txt',
                         help='model path to evaluate')
+    parser.add_argument('--vocab_name', type=str, default='vocabulary',
+                        help='model path to evaluate')
     args = parser.parse_args()
     #test_trees(args.candidate, split=args.data_name, gold=args.gold_name)
-    eval_trees(args.candidate, split=args.data_name, gold=args.gold_name)
+    eval_trees(args.candidate, args.vocab_name, split=args.data_name, gold=args.gold_name)
 

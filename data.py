@@ -99,7 +99,7 @@ class DataLoader(data.Dataset):
             for line in f:
                 (caption, span) = json.loads(line)
                 caption = [clean_number(w) for w in caption.strip().lower().split()]
-                if len(caption) < 2 or len(caption) > 70:
+                if len(caption) < 2 or len(caption) > 50:
                     continue
                 self.captions.append(caption)
                 self.spans.append(span)
@@ -179,13 +179,13 @@ def get_data_loader(data_path, data_split, vocab,
     )
     return data_loader
 
-def get_train_iters(data_path, vocab, batch_size, nworker):
+def get_train_iters(data_path, prefix, vocab, batch_size, nworker):
     train_loader = get_data_loader(
-        data_path, 'ptb-train', vocab, 
+        data_path, prefix + 'train', vocab, 
         batch_size=batch_size, shuffle=False, nworker=nworker, sampler=True, loadimg=False
     )
     val_loader = get_data_loader(
-        data_path, 'ptb-val', vocab, 
+        data_path, prefix + 'val', vocab, 
         batch_size=batch_size, shuffle=False, nworker=nworker, sampler=None, loadimg=False
     )
     return train_loader, val_loader

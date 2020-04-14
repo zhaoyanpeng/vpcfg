@@ -186,6 +186,7 @@ def validate_parser(opt, data_loader, model, vocab, logger):
     logged = False
     for i, (images, captions, lengths, ids, spans) in enumerate(data_loader):
         # make sure val logger is used
+        del images
         model.logger = val_logger
         if torch.cuda.is_available():
             if isinstance(lengths, list):
@@ -194,7 +195,7 @@ def validate_parser(opt, data_loader, model, vocab, logger):
             captions = captions.cuda()
 
         # compute the embeddings
-        bsize = images.size(0) #cum_reward.shape[0]
+        bsize = captions.size(0) #cum_reward.shape[0]
 
         nll, kl, bc, h, _, argmax_spans, trees, lprobs = model.forward_parser(captions, lengths)
 
@@ -202,7 +203,6 @@ def validate_parser(opt, data_loader, model, vocab, logger):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        bsize = images.size(0) #cum_reward.shape[0]
         total_ll += nll.sum().item()
         total_kl += kl.sum().item()
         total_bc += bc.sum().item()
@@ -241,7 +241,7 @@ def validate_parser(opt, data_loader, model, vocab, logger):
                     i, nbatch, e_log=str(model.logger)
                 )
             )
-        del images, captions
+        del captions, lengths, ids, spans
         #if i > 10: break
 
     tp, fp, fn = corpus_f1  
