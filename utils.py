@@ -85,6 +85,12 @@ def extract_parses(matrix, lengths, kbest=False, inc=1):
         lprobs.append(lprob)
     return spans, trees, lprobs
 
+def cosine_sim(im, s):
+    return im.mm(s.t())
+    
+def l2norm(x, dim=-1):
+    return x / x.norm(2, dim=dim, keepdim=True).clamp(min=1e-6)
+
 def all_binary_trees(n):
   #get all binary trees of length n
   def is_tree(tree, n):

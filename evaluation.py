@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import utils
 
+from eval_vis import validate
 from collections import OrderedDict
 
 class AverageMeter(object):
@@ -167,7 +168,10 @@ def encode_data(model, data_loader, log_step=10, logging=print, vocab=None, stag
     logging(info)
     return img_embs, cap_embs, ppl_elbo, sent_f1 * 100 
 
-def validate_parser(opt, data_loader, model, vocab, logger):
+def validate_parser(opt, data_loader, model, vocab, logger, visual_mode):
+    if visual_mode:
+        return validate(opt, data_loader, model, vocab, logger)
+
     batch_time = AverageMeter()
     val_logger = LogCollector()
     # switch to evaluate mode
@@ -180,13 +184,8 @@ def validate_parser(opt, data_loader, model, vocab, logger):
     sent_f1, corpus_f1 = [], [0., 0., 0.] 
     total_ll, total_kl, total_bc, total_h = 0., 0., 0., 0.
 
-    # numpy array to keep all the embeddings
-    img_embs = None
-    cap_embs = None
-    logged = False
     for i, (images, captions, lengths, ids, spans) in enumerate(data_loader):
         # make sure val logger is used
-        del images
         model.logger = val_logger
         if torch.cuda.is_available():
             if isinstance(lengths, list):

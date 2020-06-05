@@ -1,4 +1,4 @@
-import time
+import os, sys, time
 import numpy as np
 
 import torch
@@ -6,45 +6,70 @@ import torch.backends.cudnn as cudnn
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
+import data
 import utils
 
 from torch_struct import SentCFG
-from torch_struct.networks import RoughCCFG
+from torch_struct.networks import RoughCCFG, CompoundCFG
+from torch_struct.networks import ACompPCFG as YoonPCFG
 
 
-class VGNSLCFGs(object):
+class VGCPCFGs(object):
     NS_PARSER = 'parser'
     NS_OPTIMIZER = 'optimizer'
 
-    def __init__(self, opt):
-        self.parser = RoughCCFG(
-            opt.vocab_size, opt.nt_states, opt.t_states, 
-            h_dim = opt.h_dim,
-            w_dim = opt.w_dim,
-            z_dim = opt.z_dim,
-            s_dim = opt.state_dim
-        )
+    def __init__(self, opt, vocab, log):
+        self.vocab = vocab
         self.NT = opt.nt_states
+
+        self.niter = 0
+        self.log = log
         self.log_step = opt.log_step
         self.grad_clip = opt.grad_clip
-
-        if torch.cuda.is_available():
-            self.parser.cuda()
-            cudnn.benchmark = False 
 
         self.vse_rl_alpha = opt.vse_rl_alpha
         self.vse_mt_alpha = opt.vse_mt_alpha
         self.vse_lm_alpha = opt.vse_lm_alpha
         self.vse_bc_alpha = opt.vse_bc_alpha
         self.vse_h_alpha = opt.vse_h_alpha
+        
+        if opt.parser_type == '1st':
+            parser = RoughCCFG  
+        elif opt.parser_type == '2nd':
+            parser = CompoundCFG 
+        elif opt.parser_type == '3rd':
+            parser = YoonPCFG 
+        else:
+            raise NameError("Invalid parser type: {}".format(opt.parser_type)) 
+        self.parser = parser(
+            opt.vocab_size, opt.nt_states, opt.t_states, 
+            h_dim = opt.h_dim,
+            w_dim = opt.w_dim,
+            z_dim = opt.z_dim,
+            s_dim = opt.state_dim
+        )
+
+        w2vec_file = opt.data_path + opt.w2vec_file
+        if os.path.isfile(w2vec_file) and opt.share_w2vec:
+            word_emb = data.PartiallyFixedEmbedding(
+                self.vocab, w2vec_file, opt.word_dim
+            )
+            self.parser.enc_emb = word_emb 
 
         self.all_params = [] 
         self.all_params += list(self.parser.parameters())
-
         self.optimizer = torch.optim.Adam(
-            self.all_params, lr=opt.learning_rate, betas=(opt.beta1, opt.beta2)
+            self.all_params, lr=opt.lr, betas=(opt.beta1, opt.beta2)
         ) 
-        self.niter = 0
+
+        if torch.cuda.is_available():
+            self.parser.cuda()
+            cudnn.benchmark = False 
+
+        for k, v in self.parser.named_parameters():
+            if "enc_emb" in k:
+                self.log.info("P: {} {}".format(k, v.size()))
+        self.log.info(self.parser)
 
     def train(self):
         self.parser.train()
@@ -69,7 +94,8 @@ class VGNSLCFGs(object):
         return p_norm, g_norm
 
     def forward_parser(self, captions, lengths):
-        params, kl = self.parser(captions, use_mean=not self.parser.training)
+        #params, kl = self.parser(captions, use_mean=not self.parser.training)
+        params, kl = self.parser(captions)
         dist = SentCFG(params, lengths=lengths)
 
         rule_H = torch.tensor(0.0, device=captions.device)
@@ -99,7 +125,7 @@ class VGNSLCFGs(object):
         span_marg_matrix = None 
         return nll, kl, bc_coe, rule_H, span_marg_matrix, argmax_spans, trees, lprobs
 
-    def train_parser(self, images, captions, lengths, ids=None, spans=None, epoch=None, *args):
+    def forward(self, images, captions, lengths, ids=None, spans=None, epoch=None, *args):
         """ one training step given images and captions """
         self.niter += 1
         self.logger.update('Eit', self.niter)
@@ -137,10 +163,10 @@ class VGNSLCFGs(object):
         
         # log things
         self.logger.update('Loss', loss.item(), bsize)
-        self.logger.update('H-Loss', h_loss.item() / bsize, bsize)
-        self.logger.update('BC-Loss', bc_loss.item() / bsize, bsize)
+        #self.logger.update('H-Loss', h_loss.item() / bsize, bsize)
+        #self.logger.update('BC-Loss', bc_loss.item() / bsize, bsize)
         self.logger.update('MT-Loss', mt_loss.item() / bsize, bsize)
-        self.logger.update('RL-Loss', rl_loss.item() / bsize, bsize)
+        #self.logger.update('RL-Loss', rl_loss.item() / bsize, bsize)
         self.logger.update('KL-Loss', kl_loss.item() / bsize, bsize)
         self.logger.update('LL-Loss', ll_loss.item() / bsize, bsize)
 
@@ -175,7 +201,5 @@ class VGNSLCFGs(object):
             gold_action = utils.get_actions(gold_t) 
             gold_t = utils.get_tree(gold_action, sent_s)
             info += "\nPred T: {}\nGold T: {}".format(pred_t, gold_t)
-        if epoch > 0:
-            del images, captions, lengths, ids, spans
         return info
 

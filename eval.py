@@ -5,6 +5,7 @@ from collections import defaultdict
 
 import torch
 from torch_struct import SentCFG
+from torch_struct.networks import NeuralCFG, RoughCCFG
 
 import data
 import utils
@@ -36,6 +37,7 @@ def eval_trees(model_path, vocab_name, split='test', gold='test_ground-truth.txt
     opt.vse_bc_alpha=0.5
     opt.vse_h_alpha=0.00
 
+    """
     # construct model
     model = VGNSLCFGs(opt)
     model.logger = print
@@ -43,10 +45,21 @@ def eval_trees(model_path, vocab_name, split='test', gold='test_ground-truth.txt
     # load model state
     model.set_state_dict(checkpoint['model'])
     model.train()
+    """
+    args = opt
+    parser = RoughCCFG(args.vocab_size, args.nt_states, args.t_states, 
+                       h_dim = args.h_dim,
+                       w_dim = args.w_dim,
+                       z_dim = args.z_dim,
+                       s_dim = args.state_dim)
+    parser_params = checkpoint['model'][VGNSLCFGs.NS_PARSER]
+    parser.load_state_dict(parser_params)
+    parser.cuda()
+    parser.eval()
 
-    print('Loading dataset', opt.data_path)
     batch_size = 5 
     prefix = getattr(opt, "prefix", "")
+    print('Loading dataset', opt.data_path + prefix + split)
     data_loader = data.eval_data_iter(opt.data_path, prefix + split, vocab, batch_size=batch_size)
 
     # stats
@@ -63,7 +76,7 @@ def eval_trees(model_path, vocab_name, split='test', gold='test_ground-truth.txt
             lengths = lengths.cuda()
             captions = captions.cuda()
 
-        params, xx = model.parser(captions)
+        params, xx = parser(captions)
         dist = SentCFG(params, lengths=lengths)
         
         arg_spans = dist.argmax[-1]
