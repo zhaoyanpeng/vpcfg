@@ -1,13 +1,11 @@
-import os, sys
-import time, argparse, logging
-import pickle
+import os 
+import time, pickle, argparse, logging
 import numpy as np
 import torch
 
 import data
-from utils import Vocabulary, save_checkpoint, adjust_learning_rate
+from utils import Vocabulary, save_checkpoint
 from evaluation import AverageMeter, LogCollector, validate_parser 
-
 
 def train(opt, train_loader, model, epoch, val_loader, vocab):
     # average meters to record the training statistics
@@ -46,37 +44,6 @@ def train(opt, train_loader, model, epoch, val_loader, vocab):
         if model.niter % opt.val_step == 0:
             validate_parser(opt, val_loader, model, vocab, logger, opt.visual_mode)
 
-def debug(opt, model):
-    data_iter = data.get_eval_iter(opt.data_path, opt.prefix + "toy", vocab, 
-        batch_size=opt.batch_size, shuffle=False)
-    for images, captions, lengths, ids, spans in data_iter:
-        print(images.size(), ids, lengths)
-        print(captions)
-        print(spans)
-        print('\n')
-        lengths = torch.Tensor(lengths).long()
-        if torch.cuda.is_available():
-            spans = spans.cuda()
-            images = images.cuda()
-            lengths = lengths.cuda()
-            captions = captions.cuda()
-        #xx = model.forward_parser(captions, lengths) 
-        #xx = model.txt_enc(captions, lengths, spans)
-        train_logger = LogCollector()
-        end = time.time()
-
-        model.n_word = 0
-        model.n_sent = 0
-        model.s_time = end
-        model.all_stats = [[0., 0., 0.]]
-        model.logger = train_logger
-        model.train()
-        info = model.train_parser(images, captions, lengths, spans=spans, epoch=0)
-        print(info)
-        break
-    import sys
-    sys.exit(0)
-
 if __name__ == '__main__':
     # hyper parameters
     parser = argparse.ArgumentParser()
@@ -92,19 +59,18 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', default=-1, type=int, help='which gpu to use')
 
     # 
-    parser.add_argument('--seed', default=3435, type=int, help='random seed')
+    parser.add_argument('--seed', default=1213, type=int, help='random seed')
     parser.add_argument('--model_init', default=None, type=str, help='random seed')
     parser.add_argument('--w2vec_file', default=None, type=str, help='word vector file')
-    parser.add_argument('--vocab_name', default=None, type=str, help='vocab name')
-    parser.add_argument('--max_length', default=float("inf"), type=int, help='vocab name')
+    parser.add_argument('--vocab_name', default="coco.dict.pkl", type=str, help='vocab name')
+    parser.add_argument('--max_length', default=40, type=int, help='vocab name')
     parser.add_argument('--prefix', default="", type=str, help='prefix')
-    parser.add_argument('--parser_type', default='1st', type=str, help='model name (1st/2nd)')
+    parser.add_argument('--parser_type', default='2nd', type=str, help='model name (1st/2nd)')
     parser.add_argument('--share_w2vec', default=False, type=bool, help='shared embeddings')
     parser.add_argument('--visual_mode', default=False, type=bool, help='run visual model')
     #
     parser.add_argument('--sem_dim', default=512, type=int, help='semantic rep. dim')
     parser.add_argument('--syn_dim', default=512, type=int, help='syntactic rep. dim')
-    parser.add_argument('--encode_span', default="", type=str, help='method of encoding a span')
     parser.add_argument('--word_dim', default=512, type=int,
                         help='dimensionality of the word embedding')
     parser.add_argument('--lstm_dim', default=512, type=int,
@@ -116,7 +82,7 @@ if __name__ == '__main__':
                         help='rank loss margin')
     parser.add_argument('--num_epochs', default=30, type=int,
                         help='number of training epochs')
-    parser.add_argument('--batch_size', default=128, type=int,
+    parser.add_argument('--batch_size', default=5, type=int,
                         help='size of a training mini-batch')
     parser.add_argument('--grad_clip', default=3., type=float,
                         help='gradient clipping threshold')
@@ -125,9 +91,9 @@ if __name__ == '__main__':
     parser.add_argument('--workers', default=0, type=int,
                         help='number of data loader workers')
     #
-    parser.add_argument('--log_step', default=10, type=int,
+    parser.add_argument('--log_step', default=500, type=int,
                         help='number of steps to print and record the log')
-    parser.add_argument('--val_step', default=500, type=int,
+    parser.add_argument('--val_step', default=float("inf"), type=int,
                         help='number of steps to run validation')
     parser.add_argument('--logger_name', default='../output/',
                         help='path to save the model and log')
@@ -142,11 +108,8 @@ if __name__ == '__main__':
     parser.add_argument('--beta1', default=0.75, type=float, help='beta1 for adam')
     parser.add_argument('--beta2', default=0.999, type=float, help='beta2 for adam')
     # 
-    parser.add_argument('--vse_rl_alpha', type=float, default=1.0)
-    parser.add_argument('--vse_mt_alpha', type=float, default=1.0)
+    parser.add_argument('--vse_mt_alpha', type=float, default=0.01)
     parser.add_argument('--vse_lm_alpha', type=float, default=1.0)
-    parser.add_argument('--vse_bc_alpha', type=float, default=1.0)
-    parser.add_argument('--vse_h_alpha', type=float, default=1.0)
 
     opt = parser.parse_args()
     np.random.seed(opt.seed)
@@ -181,14 +144,9 @@ if __name__ == '__main__':
     # construct the model
     if not opt.visual_mode:
         from model import VGCPCFGs as Model
-        #from model_toy import VGCPCFGs as Model
-        sampler = True
-        #sampler = data.SortedBlockSampler 
     else:
-        #opt.encode_span = "lstm_been"
         from model_vis import VGCPCFGs as Model
-        #from model_old import VGNSLCFGs as Model
-        sampler = True
+    sampler = True
     model = Model(opt, vocab, logger)
     if opt.model_init:
         logger.info("override parser's params.")
@@ -196,10 +154,7 @@ if __name__ == '__main__':
         parser_params = checkpoint['model'][Model.NS_PARSER]
         model.parser.load_state_dict(parser_params)
 
-    #debug(opt, model)
-
     # Load data loaders
-    #data.set_rnd_seed(10101)
     data.set_constant(opt.visual_mode, opt.max_length)
     if opt.batch_size < 5:
         train_loader, val_loader = data.get_train_iters(
@@ -214,21 +169,7 @@ if __name__ == '__main__':
             opt.data_path, opt.prefix + "val", vocab, int(opt.batch_size / 2) + 1, 
             nworker=opt.workers, shuffle=False, sampler=None, loadimg=opt.visual_mode  
         )
-    """
-    all_ids = []
-    for i, train_data in enumerate(train_loader):
-        captions, lengths, ids = train_data[1], train_data[2], train_data[3]
-        captions = captions.tolist()
-        for b, length in enumerate(lengths):
-            caption = [vocab.idx2word[int(word)] for word in captions[b]]
-            caption = ' '.join(caption[:length])
-            print(caption)
-        all_ids.extend(ids)
-        if (i + 1) * opt.batch_size > 300:
-            print(all_ids)
-            import sys
-            sys.exit(0)
-    """
+
     save_checkpoint({
         'epoch': -1,
         'model': model.get_state_dict(),
@@ -240,20 +181,6 @@ if __name__ == '__main__':
     if False and opt.model_init:
         #data.set_rnd_seed(10101)
         validate_parser(opt, val_loader, model, vocab, logger, opt.visual_mode)
-
-    """
-    if True:
-        opt.encode_span = "lstm_been"
-        from model_vis import VGCPCFGs as Model
-        model = Model(opt, vocab, logger)
-        if opt.model_init:
-            logger.info("override parser's params.")
-            checkpoint = torch.load(opt.model_init, map_location='cpu')
-            parser_params = checkpoint['model'][Model.NS_PARSER]
-            model.parser.load_state_dict(parser_params)
-        data.set_rnd_seed(10101)
-        validate_parser(opt, val_loader, model, vocab, logger, opt.visual_mode)
-    """
 
     best_rsum = float('inf') 
     for epoch in range(opt.num_epochs):

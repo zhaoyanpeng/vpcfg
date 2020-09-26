@@ -1,14 +1,8 @@
-import os, sys, re, pickle, json
+import os, re, json
 import numpy as np
 import random
-
-from gensim.test.utils import datapath
-from gensim.models import KeyedVectors
-
 import torch
 import torch.utils.data as data
-
-from utils import Vocabulary
 
 TXT_IMG_DIVISOR=1
 TXT_MAX_LENGTH=45
@@ -27,49 +21,6 @@ def set_rnd_seed(seed):
 def clean_number(w):    
     new_w = re.sub('[0-9]{1,}([,.]?[0-9]*)*', 'N', w)
     return new_w
-
-class PartiallyFixedEmbedding(torch.nn.Module):
-    def __init__(self, vocab, w2vec_file, dim=-1):
-        super(PartiallyFixedEmbedding, self).__init__()
-        nword = len(vocab)
-        model = KeyedVectors.load_word2vec_format(datapath(w2vec_file), binary=False)
-        masks = [1 if vocab.idx2word[k] in model.vocab else 0 for k in range(nword)]
-        idx2fixed = [k for k in range(nword) if masks[k]]
-        idx2tuned = [k for k in range(nword) if not masks[k]]
-        arranged_idx = idx2fixed + idx2tuned
-        idx_mapping = {idx: real_idx for real_idx, idx in enumerate(arranged_idx)}
-        self.idx_mapping = idx_mapping
-        self.n_fixed = sum(masks)
-        n_tuned = nword - self.n_fixed
-
-        weight = torch.empty(nword, model.vector_size)
-        for k, idx in vocab.word2idx.items():
-            real_idx = idx_mapping[idx]
-            if k in model.vocab:
-                weight[real_idx] = torch.tensor(model[k])
-
-        self.tuned_weight = torch.nn.Parameter(torch.empty(n_tuned, model.vector_size)) 
-        torch.nn.init.kaiming_uniform_(self.tuned_weight)
-        weight[self.n_fixed:] = self.tuned_weight
-        self.register_buffer("weight", weight)
-         
-        dim = dim - model.vector_size if dim > model.vector_size else 0 
-        self.tuned_vector = torch.nn.Parameter(torch.empty(nword, dim))
-        if dim > 0: 
-            torch.nn.init.kaiming_uniform_(self.tuned_vector)
-        del model
-
-    def reindex(self, X):
-        return X.clone().cpu().apply_(self.idx_mapping.get)
-
-    def forward(self, X):
-        self.weight.detach_()
-        self.weight[self.n_fixed:] = self.tuned_weight
-        weight = torch.cat([self.weight, self.tuned_vector], -1)
-        #X = X.clone().cpu().apply_(self.idx_mapping.get) # only work on cpus
-        X = X.clone().cpu().apply_(self.idx_mapping.get).cuda() 
-        #print(X, weight.device, self.weight.device, self.tuned_vector.device)
-        return torch.nn.functional.embedding(X, weight, None, None, 2.0, False, False)
 
 class EvalDataLoader(data.Dataset):
     def __init__(self, data_path, data_split, vocab, min_length=1, max_length=100):
@@ -328,120 +279,3 @@ def get_eval_iter(data_path, split_name, vocab, batch_size,
                   sampler=sampler
     )
     return eval_loader
-
-
-def test_data_loader():
-    data_path = "/home/s1847450/data/vsyntax/mscoco/"
-    vocab = pickle.load(open(data_path + "coco.dict.pkl", 'rb'))
-
-    batch_size = 3 
-    nworker = 2
-    
-    train_data_iter, val_data_iter = get_train_iters(
-        data_path, vocab, batch_size, nworker
-    )
-
-    """
-    for images, targets, lengths, ids, spans in train_data_iter:
-        print(images.size(), ids, lengths)
-        print(spans)
-        break
-    for images, targets, lengths, ids, spans in val_data_iter:
-        print(images.size(), ids, lengths)
-        print(spans)
-        break
-    """
-
-    shuffle = False 
-    data_split = "val"
-    data_iter = get_eval_iter(data_path, data_split, vocab, 
-        batch_size=batch_size, shuffle=shuffle, nworker=nworker)
-    for images, targets, lengths, ids, spans in data_iter:
-        print(images.size(), ids, lengths)
-        print(spans)
-        break
-
-def test_sorted_data_loader():
-    data_path = "/home/s1847450/data/vsyntax/mscoco/"
-    vocab = pickle.load(open(data_path + "coco.dict.pkl", 'rb'))
-
-    batch_size = 5 
-    nworker = 2
-    
-    shuffle = False 
-    data_split = "val"
-    data_iter = get_eval_iter(data_path, data_split, vocab, 
-        batch_size=batch_size, shuffle=shuffle, nworker=nworker, sampler=True)
-    for i in range(3):
-        for j, (images, targets, lengths, ids, spans) in enumerate(data_iter):
-            print(images.size(), ids, lengths)
-            print(targets)
-            print(spans)
-            if j == 1:
-                break
-
-def test_eval_data_loader():
-    data_path = "/home/s1847450/data/vsyntax/mscoco/"
-    vocab = pickle.load(open(data_path + "coco.dict.pkl", 'rb'))
-
-    batch_size = 3 
-    data_split = "val_gold"
-    data_iter = eval_data_iter(data_path, data_split, vocab, batch_size=batch_size)
-    for i in range(1):
-        for j, (captions, lengths, spans, labels, tags, ids) in enumerate(data_iter):
-            print("ids: ", ids)
-            print("lengths: ", lengths)
-            print("captions:\n", captions)
-            print("labels:\n", labels)
-            print("spans:\n", spans)
-            print("tags:\n", tags)
-            if j == 1:
-                break
-
-def test_embedder():
-    data_path = "/home/s1847450/data/vsyntax/mstree/"
-    vocab = pickle.load(open(data_path + "msp.dict.pkl", 'rb'))
-    w2vec_file = data_path + "msp.dict.6B.200d.vec"
-    
-    dim = 200
-    enc_emb = PartiallyFixedEmbedding(vocab, w2vec_file, dim)
-    enc_emb = enc_emb.cuda()
-    model = KeyedVectors.load_word2vec_format(datapath(w2vec_file), binary=False)
-    
-    word = ["seas", "plane", "clasps", "stylist"]
-    widx = [vocab.word2idx[w] for w in word]
-    widx = torch.tensor(widx).long()
-    
-    vec0 = model[word]
-    vec1 = enc_emb(widx)
-    
-    print(vec0.size())
-    print(vec1.size())
-    assert vec0.tolist() == vec1.tolist()
-    
-def test_block_data_loader():
-    data_path = "/home/s1847450/data/vsyntax/treebk/"
-    vocab = pickle.load(open(data_path + "ptb.dict.pkl", 'rb'))
-    
-    seed = 6768 
-    set_rnd_seed(seed)
-
-    batch_size = 10 
-    data_split = "ptb-val"
-    sampler = SortedBlockSampler
-    #sampler = None 
-    data_iter = get_eval_iter(data_path, data_split, vocab, batch_size=batch_size, sampler=sampler)
-    for i in range(1):
-        for j, (images, targets, lengths, ids, spans) in enumerate(data_iter):
-            print(j, ids, "lengths: ", lengths)
-            if j == 10:
-                #break
-                pass
-
-if __name__ == '__main__':
-    #test_data_loader()
-    #test_sorted_data_loader()
-    #test_eval_data_loader()
-    #test_embedder()
-    test_block_data_loader()
-    pass

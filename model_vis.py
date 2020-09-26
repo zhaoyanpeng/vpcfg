@@ -1,50 +1,34 @@
-import os, sys, time
+import time
 import numpy as np
 
 import torch
 import torch.backends.cudnn as cudnn
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
-import utils
-from data import PartiallyFixedEmbedding
-from module import ContrastiveLoss, ImageEncoder, TextEncoder
-
 from torch_struct import SentCFG
-from torch_struct.networks import RoughCCFG, CompoundCFG
-from torch_struct.networks import ACompPCFG as YoonPCFG
 
+import utils
+from module import CompoundCFG, ContrastiveLoss, ImageEncoder, TextEncoder
 
 class VGCPCFGs(object):
     NS_PARSER = 'parser'
     NS_TXT_ENCODER = 'txt_enc'
     NS_IMG_ENCODER = 'img_enc' 
     NS_OPTIMIZER = 'optimizer'
-    def __init__(self, opt, vocab, log):
-        self.vocab = vocab
-        self.NT = opt.nt_states
 
+    def __init__(self, opt, vocab, logger):
         self.niter = 0
-        self.log = log
+        self.vocab = vocab
+        self.logger = logger
         self.log_step = opt.log_step
         self.grad_clip = opt.grad_clip
 
-        self.vse_rl_alpha = opt.vse_rl_alpha
         self.vse_mt_alpha = opt.vse_mt_alpha
         self.vse_lm_alpha = opt.vse_lm_alpha
-        self.vse_bc_alpha = opt.vse_bc_alpha
-        self.vse_h_alpha = opt.vse_h_alpha
 
         self.loss_criterion = ContrastiveLoss(margin=opt.margin)
 
-        if opt.parser_type == '1st':
-            parser = RoughCCFG  
-        elif opt.parser_type == '2nd':
-            parser = CompoundCFG 
-        elif opt.parser_type == '3rd':
-            parser = YoonPCFG 
-        else:
-            raise NameError("Invalid parser type: {}".format(opt.parser_type)) 
-        self.parser = parser(
+        self.parser = CompoundCFG(
             opt.vocab_size, opt.nt_states, opt.t_states, 
             h_dim = opt.h_dim,
             w_dim = opt.w_dim,
@@ -52,25 +36,13 @@ class VGCPCFGs(object):
             s_dim = opt.state_dim
         )
 
-        w2vec_file = opt.data_path + opt.w2vec_file
-        if os.path.isfile(w2vec_file):
-            word_emb = PartiallyFixedEmbedding(
-                self.vocab, w2vec_file, opt.word_dim
-            )
-        else:
-            word_emb = torch.nn.Embedding(len(vocab), opt.word_dim)
-            torch.nn.init.xavier_uniform_(word_emb.weight)
+        word_emb = torch.nn.Embedding(len(vocab), opt.word_dim)
+        torch.nn.init.xavier_uniform_(word_emb.weight)
 
         self.all_params = [] 
         self.img_enc = ImageEncoder(opt)
-        if opt.share_w2vec:
-            self.parser.enc_emb = word_emb 
-            self.txt_enc = TextEncoder(opt, None)
-            self.all_params += list(self.txt_enc.parameters())
-            self.txt_enc.set_enc_emb(word_emb) # word_emb optimized once
-        else:
-            self.txt_enc = TextEncoder(opt, word_emb)
-            self.all_params += list(self.txt_enc.parameters())
+        self.txt_enc = TextEncoder(opt, word_emb)
+        self.all_params += list(self.txt_enc.parameters())
         self.all_params += list(self.parser.parameters())
         self.all_params += list(self.img_enc.parameters())
         self.optimizer = torch.optim.Adam(
@@ -78,34 +50,21 @@ class VGCPCFGs(object):
         ) 
 
         if torch.cuda.is_available():
-            self.parser.cuda()
+            cudnn.benchmark = False 
             self.img_enc.cuda()
             self.txt_enc.cuda()
-            cudnn.benchmark = False 
-
-        self.log.info(self.parser)
-        p_emb, t_emb = None, None
-        for k, v in self.parser.named_parameters():
-            if "enc_emb" in k:
-                p_emb = v
-                self.log.info("P: {} {}".format(k, v.size()))
-        for k, v in self.txt_enc.named_parameters():
-            if "enc_emb" in k:
-                t_emb = v
-                self.log.info("T: {} {}".format(k, v.size()))
-        if opt.share_w2vec:
-            #assert p_emb == t_emb
-            pass
+            self.parser.cuda()
+        self.logger.info(self.parser)
 
     def train(self):
-        self.parser.train()
         self.img_enc.train()
         self.txt_enc.train()
+        self.parser.train()
 
     def eval(self):
-        self.parser.eval()
         self.img_enc.eval()
         self.txt_enc.eval()
+        self.parser.eval()
 
     def get_state_dict(self):
         state_dict = { 
@@ -128,40 +87,19 @@ class VGCPCFGs(object):
         return p_norm, g_norm
 
     def forward_parser(self, captions, lengths):
-        #params, kl = self.parser(captions, use_mean=not self.parser.training)
         params, kl = self.parser(captions)
         dist = SentCFG(params, lengths=lengths)
-
-        rule_H = torch.tensor(0.0, device=captions.device)
-        bc_coe = torch.tensor(0.0, device=captions.device)
-        if self.vse_h_alpha > 0. or self.vse_bc_alpha > 0.:
-            bsize = captions.size(0)
-            rule_lprobs = params[1].view(bsize, self.NT, -1)
-            rule_probs = rule_lprobs.exp()
-            if self.vse_h_alpha > 0.:
-                rule_H = -(rule_probs * rule_lprobs).sum(-1).mean(-1)
-            if self.vse_bc_alpha > 0.:
-                bc_coe = torch.matmul(rule_probs, rule_probs.transpose(-1, -2))
-                I = torch.arange(self.NT, device=captions.device).long()
-                bc_coe[:, I, I] = 0 
-                bc_coe = bc_coe.sqrt().sum(-1).mean(-1)
 
         the_spans = dist.argmax[-1]
         argmax_spans, trees, lprobs = utils.extract_parses(the_spans, lengths.tolist(), inc=0) 
 
-        #ll, _ = dist.partition
-        #ll, _ = dist.inside
-        #ll, _ = dist.inside_bp
-        #ll    = dist.partition
         ll, span_margs = dist.inside_im
         nll = -ll
         kl = torch.zeros_like(nll) if kl is None else kl
-
-        return nll, kl, bc_coe, rule_H, span_margs, argmax_spans, trees, lprobs
+        return nll, kl, span_margs, argmax_spans, trees, lprobs
 
     def forward_encoder(self, images, captions, lengths, spans, require_grad=True):
         if torch.cuda.is_available():
-            #spans = spans.cuda()
             images = images.cuda()
             lengths = lengths.cuda()
             captions = captions.cuda()
@@ -169,12 +107,9 @@ class VGCPCFGs(object):
             img_emb = self.img_enc(images)
             parser_outs = self.forward_parser(captions, lengths) 
             txt_outputs = self.txt_enc(captions, lengths, parser_outs[-3])
-        return (img_emb, ) + txt_outputs + parser_outs
+        return (img_emb, txt_outputs) + parser_outs
 
-    def forward_loss(self, 
-        base_img_emb, cap_span_features, left_span_features, right_span_features, 
-        word_embs, lengths, span_bounds, span_margs):
-
+    def forward_loss(self, base_img_emb, cap_span_features, lengths, span_bounds, span_margs):
         b = base_img_emb.size(0)
         N = lengths.max(0)[0]
         nstep = int(N * (N - 1) / 2)
@@ -198,8 +133,7 @@ class VGCPCFGs(object):
         span_margs = span_margs.sum(-1)
         expected_loss = span_margs[:, : nstep] * matching_loss_matrix 
         expected_loss = expected_loss.sum(-1)
-        #expected_loss = expected_loss.sum(-1) / b 
-        return None, expected_loss
+        return expected_loss
 
     def forward(self, images, captions, lengths, ids=None, spans=None, epoch=None, *args):
         self.niter += 1
@@ -208,23 +142,18 @@ class VGCPCFGs(object):
 
         lengths = torch.tensor(lengths).long() if isinstance(lengths, list) else lengths
 
-        #print(lengths)
-
-        img_emb, cap_span_features, left_span_features, right_span_features, \
-            word_embs, tree_indices, probs, span_bounds, nll, kl, bc, h, span_margs, \
-                argmax_spans, trees, lprobs = self.forward_encoder(
-            images, captions, lengths, spans
+        img_emb, cap_span_features, nll, kl, span_margs, argmax_spans, trees, lprobs = \
+            self.forward_encoder(
+                images, captions, lengths, spans
+            )
+        matching_loss = self.forward_loss(
+            img_emb, cap_span_features, lengths, argmax_spans, span_margs
         )
 
-        cum_reward, matching_loss = self.forward_loss(
-            img_emb, cap_span_features, left_span_features, right_span_features, 
-            word_embs, lengths, argmax_spans, span_margs
-        )
-
-        bsize = images.size(0) 
+        bsize = captions.size(0) 
 
         rl_loss = torch.tensor(0.0, device=nll.device) 
-        mt_loss = matching_loss.sum() #torch.tensor(0.0, device=nll.device)        
+        mt_loss = matching_loss.sum()
 
         kl.clamp_(max=20) # avoid kl explosion
         if self.vse_lm_alpha <=0.:
@@ -233,29 +162,17 @@ class VGCPCFGs(object):
 
         ll_loss = nll.sum()
         kl_loss = kl.sum()
-        bc_loss = bc.sum()
-        h_loss = h.sum()
         
-        loss = self.vse_rl_alpha * rl_loss + \
-               self.vse_mt_alpha * mt_loss + \
-               self.vse_lm_alpha * (ll_loss + kl_loss) + \
-               self.vse_bc_alpha * bc_loss + \
-               self.vse_h_alpha * h_loss
-        loss = loss / bsize  
+        loss = (self.vse_mt_alpha * mt_loss + self.vse_lm_alpha * (ll_loss + kl_loss)) / bsize 
 
-        # compute gradient and do SGD step
         self.optimizer.zero_grad()
         loss.backward()
         if self.grad_clip > 0:
             clip_grad_norm_(self.all_params, self.grad_clip)
         self.optimizer.step()
         
-        # log things
         self.logger.update('Loss', loss.item(), bsize)
-        #self.logger.update('H-Loss', h_loss.item() / bsize, bsize)
-        #self.logger.update('BC-Loss', bc_loss.item() / bsize, bsize)
         self.logger.update('MT-Loss', mt_loss.item() / bsize, bsize)
-        #self.logger.update('RL-Loss', rl_loss.item() / bsize, bsize)
         self.logger.update('KL-Loss', kl_loss.item() / bsize, bsize)
         self.logger.update('LL-Loss', ll_loss.item() / bsize, bsize)
 
@@ -292,7 +209,6 @@ class VGCPCFGs(object):
             info += "\nPred T: {}\nGold T: {}".format(pred_t, gold_t)
         if epoch > 0: #
             del img_emb, cap_span_features, left_span_features, right_span_features, \
-                word_embs, tree_indices, probs, span_bounds, nll, kl, bc, h, span_margs, \
-                argmax_spans, trees, lprobs, cum_reward, matching_loss 
+                word_embs, tree_indices, probs, span_bounds, nll, kl, span_margs, \
+                argmax_spans, trees, lprobs, matching_loss 
         return info
-

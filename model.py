@@ -1,60 +1,32 @@
-import os, sys, time
+import time
 import numpy as np
 
 import torch
 import torch.backends.cudnn as cudnn
-
 from torch.nn.utils.clip_grad import clip_grad_norm_
-
-import data
-import utils
-
 from torch_struct import SentCFG
-from torch_struct.networks import RoughCCFG, CompoundCFG
-from torch_struct.networks import ACompPCFG as YoonPCFG
 
+import utils
+from module import CompoundCFG
 
 class VGCPCFGs(object):
     NS_PARSER = 'parser'
     NS_OPTIMIZER = 'optimizer'
 
-    def __init__(self, opt, vocab, log):
-        self.vocab = vocab
-        self.NT = opt.nt_states
-
+    def __init__(self, opt, vocab, logger):
         self.niter = 0
-        self.log = log
+        self.vocab = vocab
         self.log_step = opt.log_step
         self.grad_clip = opt.grad_clip
-
-        self.vse_rl_alpha = opt.vse_rl_alpha
-        self.vse_mt_alpha = opt.vse_mt_alpha
         self.vse_lm_alpha = opt.vse_lm_alpha
-        self.vse_bc_alpha = opt.vse_bc_alpha
-        self.vse_h_alpha = opt.vse_h_alpha
         
-        if opt.parser_type == '1st':
-            parser = RoughCCFG  
-        elif opt.parser_type == '2nd':
-            parser = CompoundCFG 
-        elif opt.parser_type == '3rd':
-            parser = YoonPCFG 
-        else:
-            raise NameError("Invalid parser type: {}".format(opt.parser_type)) 
-        self.parser = parser(
+        self.parser = CompoundCFG(
             opt.vocab_size, opt.nt_states, opt.t_states, 
             h_dim = opt.h_dim,
             w_dim = opt.w_dim,
             z_dim = opt.z_dim,
             s_dim = opt.state_dim
         )
-
-        w2vec_file = opt.data_path + opt.w2vec_file
-        if os.path.isfile(w2vec_file) and opt.share_w2vec:
-            word_emb = data.PartiallyFixedEmbedding(
-                self.vocab, w2vec_file, opt.word_dim
-            )
-            self.parser.enc_emb = word_emb 
 
         self.all_params = [] 
         self.all_params += list(self.parser.parameters())
@@ -63,13 +35,9 @@ class VGCPCFGs(object):
         ) 
 
         if torch.cuda.is_available():
-            self.parser.cuda()
             cudnn.benchmark = False 
-
-        for k, v in self.parser.named_parameters():
-            if "enc_emb" in k:
-                self.log.info("P: {} {}".format(k, v.size()))
-        self.log.info(self.parser)
+            self.parser.cuda()
+        logger.info(self.parser)
 
     def train(self):
         self.parser.train()
@@ -94,79 +62,41 @@ class VGCPCFGs(object):
         return p_norm, g_norm
 
     def forward_parser(self, captions, lengths):
-        #params, kl = self.parser(captions, use_mean=not self.parser.training)
         params, kl = self.parser(captions)
         dist = SentCFG(params, lengths=lengths)
-
-        rule_H = torch.tensor(0.0, device=captions.device)
-        bc_coe = torch.tensor(0.0, device=captions.device)
-        if self.vse_h_alpha > 0. or self.vse_bc_alpha > 0.:
-            bsize = captions.size(0)
-            rule_lprobs = params[1].view(bsize, self.NT, -1)
-            rule_probs = rule_lprobs.exp()
-            if self.vse_h_alpha > 0.:
-                rule_H = -(rule_probs * rule_lprobs).sum(-1).mean(-1)
-            if self.vse_bc_alpha > 0.:
-                bc_coe = torch.matmul(rule_probs, rule_probs.transpose(-1, -2))
-                I = torch.arange(self.NT, device=captions.device).long()
-                bc_coe[:, I, I] = 0 
-                bc_coe = bc_coe.sqrt().sum(-1).mean(-1)
 
         the_spans = dist.argmax[-1]
         argmax_spans, trees, lprobs = utils.extract_parses(the_spans, lengths.tolist(), inc=0) 
 
-        #ll, _ = dist.partition
-        #ll, _ = dist.inside
-        #ll, _ = dist.inside_bp
         ll = dist.partition
         nll = -ll
         kl = torch.zeros_like(nll) if kl is None else kl
-
-        span_marg_matrix = None 
-        return nll, kl, bc_coe, rule_H, span_marg_matrix, argmax_spans, trees, lprobs
+        return nll, kl, argmax_spans, trees, lprobs
 
     def forward(self, images, captions, lengths, ids=None, spans=None, epoch=None, *args):
-        """ one training step given images and captions """
         self.niter += 1
         self.logger.update('Eit', self.niter)
         self.logger.update('lr', self.optimizer.param_groups[0]['lr'])
+        lengths = torch.tensor(lengths).long() if isinstance(lengths, list) else lengths
         if torch.cuda.is_available():
-            if isinstance(lengths, list):
-                lengths = torch.tensor(lengths).long()
-            lengths = lengths.cuda()
             captions = captions.cuda()
-        bsize = images.size(0) 
+            lengths = lengths.cuda()
+        bsize = captions.size(0) 
 
-        nll, kl, bc, h, _, argmax_spans, trees, lprobs = self.forward_parser(captions, lengths)
-
-        rl_loss = torch.tensor(0.0, device=nll.device) 
-        mt_loss = torch.tensor(0.0, device=nll.device)        
+        nll, kl, argmax_spans, trees, lprobs = self.forward_parser(captions, lengths)
 
         ll_loss = nll.sum()
         kl_loss = kl.sum()
-        bc_loss = bc.sum()
-        h_loss = h.sum()
         
-        loss = self.vse_rl_alpha * rl_loss + \
-               self.vse_mt_alpha * mt_loss + \
-               self.vse_lm_alpha * (ll_loss + kl_loss) + \
-               self.vse_bc_alpha * bc_loss + \
-               self.vse_h_alpha * h_loss
-        loss = loss / bsize  
+        loss = self.vse_lm_alpha * (ll_loss + kl_loss) / bsize
 
-        # compute gradient and do SGD step
         self.optimizer.zero_grad()
         loss.backward()
         if self.grad_clip > 0:
             clip_grad_norm_(self.all_params, self.grad_clip)
         self.optimizer.step()
         
-        # log things
         self.logger.update('Loss', loss.item(), bsize)
-        #self.logger.update('H-Loss', h_loss.item() / bsize, bsize)
-        #self.logger.update('BC-Loss', bc_loss.item() / bsize, bsize)
-        self.logger.update('MT-Loss', mt_loss.item() / bsize, bsize)
-        #self.logger.update('RL-Loss', rl_loss.item() / bsize, bsize)
         self.logger.update('KL-Loss', kl_loss.item() / bsize, bsize)
         self.logger.update('LL-Loss', ll_loss.item() / bsize, bsize)
 
@@ -202,4 +132,3 @@ class VGCPCFGs(object):
             gold_t = utils.get_tree(gold_action, sent_s)
             info += "\nPred T: {}\nGold T: {}".format(pred_t, gold_t)
         return info
-
